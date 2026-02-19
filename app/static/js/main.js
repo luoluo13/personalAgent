@@ -17,9 +17,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     let isAIResponding = false;
     let interruptionController = null;
     let lastInterruptedContext = "";
+    let recallInterval = null;
     
     // Config
     let botName = "Yuki"; // Default
+
+    function startRecallAnimation() {
+        if (recallInterval) clearInterval(recallInterval);
+        
+        const phases = [
+            `她正在回忆...`,
+            `她想起了一些往事...`,
+            `她好像有话要说...`
+        ];
+        
+        let phaseIndex = 0;
+        updateTypingText(phases[0]);
+        
+        recallInterval = setInterval(() => {
+            phaseIndex++;
+            if (phaseIndex < phases.length) {
+                updateTypingText(phases[phaseIndex]);
+            } else {
+                clearInterval(recallInterval);
+            }
+        }, 1500); // Switch every 1.5s
+    }
+
+    function stopRecallAnimation() {
+        if (recallInterval) {
+            clearInterval(recallInterval);
+            recallInterval = null;
+        }
+    }
 
     // Theme Logic
     const savedTheme = localStorage.getItem('theme') || 'light';
@@ -229,8 +259,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const text = messageBuffer.join('\n');
         messageBuffer = []; // Clear buffer
         
-        // Show typing indicator
-        updateTypingText("对方正在打字..."); // API wait status
+        // Start Recall Animation (Phase 2 Feature)
+        startRecallAnimation();
         showTyping(true);
         isAIResponding = true;
         updateSendButtonState(); // Update to stop button
@@ -271,6 +301,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 })
             });
 
+            // Stop animation once we get headers/response
+            stopRecallAnimation();
+
             if (!response.ok) {
                 throw new Error('Network response was not ok');
             }
@@ -283,6 +316,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await simulateStreaming(data.response);
 
         } catch (error) {
+            stopRecallAnimation();
             console.error('Error:', error);
             showTyping(false);
             isAIResponding = false;

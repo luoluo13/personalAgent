@@ -1,6 +1,7 @@
 import openai
 from app.config import settings
 from app.core.memory import memory_service
+from app.core.time_parser import time_parser
 
 class LLMService:
     def __init__(self):
@@ -28,19 +29,17 @@ class LLMService:
             if context_flags.get("chat_cleared"):
                 extra_system_context.append("（系统提示：用户刚刚清空了聊天界面，这是新的一轮对话）")
 
-        # 2. Retrieve relevant memories (Long-term memory)
-        memories = memory_service.retrieve_relevant_memories(user_id, message)
+        # 2. Extract Time Entity & Retrieve Memories
+        time_range = time_parser.parse_time_query(message)
+        memories = memory_service.retrieve_relevant_memories(user_id, message, time_range=time_range)
         memory_context = "\n".join([f"- {m}" for m in memories])
         
         # 3. Get recent conversation history (Short-term memory)
-        # We fetch from Redis or DB. Here we can use the DB fetch for simplicity and robustness
         recent_history = memory_service.get_recent_history(user_id, limit=10)
         
         # 4. Construct System Prompt
-        # Replace placeholder with configured name
         formatted_system_prompt = settings.system_prompt.replace("{name}", settings.bot_name)
         
-        # Append extra context from flags
         if extra_system_context:
             formatted_system_prompt += "\n\n" + "\n".join(extra_system_context)
 
@@ -63,14 +62,34 @@ class LLMService:
         # 6. Call LLM
         try:
             response = self.client.chat.completions.create(
-                model="deepseek-chat", # Assuming standard model name for V3
+                model="deepseek-chat",
                 messages=messages,
-                temperature=1.3, # High temperature for more personality
+                temperature=1.3,
                 stream=False
             )
             return response.choices[0].message.content
         except Exception as e:
             print(f"LLM Error: {e}")
             return "哥哥，我现在有点头晕，想不起来了... (API Error)"
+
+    def complete(self, messages: list, temperature: float = 0.7, json_mode: bool = False):
+        """
+        Generic completion method for internal tasks (summarization, extraction).
+        """
+        try:
+            kwargs = {
+                "model": "deepseek-chat",
+                "messages": messages,
+                "temperature": temperature,
+                "stream": False
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+
+            response = self.client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"LLM Completion Error: {e}")
+            return None
 
 llm_service = LLMService()

@@ -25,6 +25,65 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(user_id)
     )
     ''')
+
+    # Create weekly summaries table (L1)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS weekly_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        week_start DATE,
+        summary TEXT,
+        key_events TEXT, -- JSON string
+        emotional_trend TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+    ''')
+
+    # Create monthly summaries table (L2)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS monthly_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        month_start DATE,
+        summary TEXT,
+        key_events TEXT, -- JSON string
+        emotional_trend TEXT,
+        relationship_milestone TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+    ''')
+
+    # Create yearly summaries table (L3)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS yearly_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        year_start DATE,
+        summary TEXT,
+        key_events TEXT, -- JSON string
+        emotional_trend TEXT,
+        relationship_milestone TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+    ''')
+
+    # Create memory timeline table for hybrid retrieval
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS memory_timeline (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        date_key DATE,
+        memory_id TEXT,
+        layer INTEGER,
+        importance REAL DEFAULT 0.5,
+        entities TEXT, -- JSON array of entities
+        content_preview TEXT, -- Optional: for quick preview
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+    ''')
     
     conn.commit()
     conn.close()
