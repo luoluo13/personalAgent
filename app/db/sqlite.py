@@ -85,6 +85,15 @@ def init_db():
     )
     ''')
     
+    # Create system_state table to track shutdown/startup times
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS system_state (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
     conn.commit()
     conn.close()
 
