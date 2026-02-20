@@ -21,7 +21,7 @@ def init_db():
         user_id TEXT,
         message TEXT,
         role TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        timestamp TIMESTAMP DEFAULT (datetime('now', 'localtime')),
         FOREIGN KEY (user_id) REFERENCES users(user_id)
     )
     ''')

@@ -45,9 +45,14 @@ class MemoryService:
         # Ensure user exists
         cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         
+        # Insert with explicit LOCAL timestamp from Python to ensure consistency
+        # This overrides SQLite's default, making it independent of DB timezone settings
+        from datetime import datetime
+        now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         cursor.execute(
-            "INSERT INTO conversations (user_id, message, role) VALUES (?, ?, ?)",
-            (user_id, message, role)
+            "INSERT INTO conversations (user_id, message, role, timestamp) VALUES (?, ?, ?, ?)",
+            (user_id, message, role, now_local)
         )
         conn.commit()
         conn.close()

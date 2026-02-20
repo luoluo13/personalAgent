@@ -8,11 +8,14 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
-    
+    is_recalling: bool = False
+    timestamp_display: str # Current server time formatted HH:MM
+
 class MemoryExtractRequest(BaseModel):
     user_id: str
 
 class HistoryResponse(BaseModel):
     role: str
     content: str
-    timestamp: str
+    timestamp_display: str # Pre-formatted display time
+

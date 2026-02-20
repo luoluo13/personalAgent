@@ -18,30 +18,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     let interruptionController = null;
     let lastInterruptedContext = "";
     let recallInterval = null;
+    let isRecalling = false; // Track recall state locally for UI
     
     // Config
-    let botName = "Yuki"; // Default
+    let botName = "Default"; // Default
 
     function startRecallAnimation() {
         if (recallInterval) clearInterval(recallInterval);
         
-        const phases = [
-            `她正在回忆...`,
-            `她想起了一些往事...`,
-            `她好像有话要说...`
-        ];
+        // Use a simpler animation based on user feedback
+        // Just flash "对方陷入了回忆..." then stop
+        // Or cycle dots? 
+        // For now, we will manually set text in the fetch logic, so this helper 
+        // might just be a visual cycler if we wanted.
+        // But since we are handling text updates explicitly in sendBuffer, 
+        // we can simplify this or leave it empty if unused.
+        // Actually, let's keep it for the dot animation "..." if we want dynamic dots.
+        // But the current implementation cycles text phases which we overrode.
         
-        let phaseIndex = 0;
-        updateTypingText(phases[0]);
-        
-        recallInterval = setInterval(() => {
-            phaseIndex++;
-            if (phaseIndex < phases.length) {
-                updateTypingText(phases[phaseIndex]);
-            } else {
-                clearInterval(recallInterval);
-            }
-        }, 1500); // Switch every 1.5s
+        // Let's repurpose this for a subtle "thinking" dot animation if needed, 
+        // otherwise just clear it to avoid conflict.
     }
 
     function stopRecallAnimation() {
@@ -238,13 +234,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (history.length > 0) {
                 chatContainer.innerHTML = '';
                 history.forEach(msg => {
+                    // Pass the pre-formatted timestamp to appendMessage
                     if (msg.role === 'user') {
-                        appendMessage('user', msg.content);
+                        appendMessage('user', msg.content, msg.timestamp_display);
                     } else {
                         // Use smartSplit for AI messages to restore multi-bubble look
                         const segments = smartSplit(msg.content);
                         segments.forEach(segment => {
-                            appendMessage('ai', segment);
+                            appendMessage('ai', segment, msg.timestamp_display);
                         });
                     }
                 });
@@ -259,9 +256,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const text = messageBuffer.join('\n');
         messageBuffer = []; // Clear buffer
         
-        // Start Recall Animation (Phase 2 Feature)
-        startRecallAnimation();
+        // Initial state: "Processing..."
         showTyping(true);
+        updateTypingText("对方正在思考..."); // Step 1: Thinking
         isAIResponding = true;
         updateSendButtonState(); // Update to stop button
 
@@ -310,10 +307,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const data = await response.json();
             
-            showTyping(false);
+            // Check if backend performed recall
+            if (data.is_recalling) {
+                // If backend says it recalled, show specific recall animation
+                startRecallAnimation(); // This cycles through "正在回忆..." -> "想起往事..."
+                // But we want specific sequence: "对方陷入了回忆..." -> "对方正在输入..."
+                // Let's override the complex animation with a simpler one based on requirement.
+                stopRecallAnimation(); // Stop the complex cycler
+                
+                updateTypingText("对方陷入了回忆...");
+                await new Promise(r => setTimeout(r, 1500)); // Pause to show "Recalling" state
+            }
+            
+            // Now switch to typing state
+            updateTypingText("对方正在输入...");
             
             // Start streaming simulation
-            await simulateStreaming(data.response);
+            await simulateStreaming(data.response, data.timestamp_display);
 
         } catch (error) {
             stopRecallAnimation();
@@ -405,7 +415,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return segments;
     }
 
-    async function simulateStreaming(fullText) {
+    async function simulateStreaming(fullText, timestampDisplay = null) {
         interruptionController = new AbortController();
         const signal = interruptionController.signal;
         
@@ -413,7 +423,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const segments = smartSplit(fullText);
         
         try {
-            updateTypingText("对方正在回忆..."); // Initial state
+            updateTypingText("对方正在输入..."); // Step 3: Typing
             
             for (let i = 0; i < segments.length; i++) {
                 const segment = segments[i];
@@ -422,7 +432,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 1. Show Typing Indicator for this segment
                 showTyping(true);
-                updateTypingText("对方正在打字...");
+                updateTypingText("对方正在输入...");
                 scrollToBottom();
 
                 // 2. Calculate delay based on segment length (simulate reading/thinking/typing)
@@ -439,7 +449,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 3. Hide indicator and Show Message Bubble
                 showTyping(false);
-                appendMessage('ai', segment);
+                appendMessage('ai', segment, timestampDisplay);
                 scrollToBottom();
                 
                 // 4. Small pause between bubbles if there are more
@@ -481,14 +491,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Removed old sendMessage function
 
 
-    function appendMessage(role, text) {
+    function appendMessage(role, text, timestampDisplay = null) {
         const msgDiv = document.createElement('div');
         msgDiv.className = `message ${role === 'user' ? 'user-message' : 'ai-message'}`;
         
-        // Simple markdown-like parsing for line breaks
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
         const formattedText = text.replace(/\n/g, '<br>');
-        msgDiv.innerHTML = formattedText;
+        contentDiv.innerHTML = formattedText;
+        msgDiv.appendChild(contentDiv);
+
+        // Add timestamp
+        const timeSpan = document.createElement('div');
+        timeSpan.className = 'message-time';
         
+        // Use provided pre-formatted timestamp string directly
+        if (timestampDisplay) {
+            timeSpan.textContent = timestampDisplay;
+        } else {
+            // Fallback for new user messages (local time formatted manually)
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            timeSpan.textContent = `${hours}:${minutes}`;
+        }
+        
+        msgDiv.appendChild(timeSpan);
         chatContainer.appendChild(msgDiv);
     }
 

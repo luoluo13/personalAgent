@@ -244,6 +244,24 @@ body {
     to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+.message-content {
+    word-wrap: break-word;
+}
+
+.message-time {
+    font-size: 10px;
+    color: rgba(0, 0, 0, 0.4);
+    text-align: right;
+    margin-top: 2px;
+    margin-left: 8px;
+    float: right; /* Float to right to sit next to text if possible, or below */
+    line-height: 1;
+}
+
+.user-message .message-time {
+    color: rgba(255, 255, 255, 0.7);
+}
+
 .system-message {
     align-self: center;
     background: rgba(0, 0, 0, 0.05);
