@@ -109,22 +109,6 @@ class MemoryService:
         conn.commit()
         conn.close()
 
-    def get_memories_by_range(self, user_id: str, start_date: str, end_date: str):
-        """Get raw conversations (L0) within a date range."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT message, role, timestamp FROM conversations 
-            WHERE user_id = ? AND date(timestamp) BETWEEN ? AND ?
-            ORDER BY timestamp ASC
-            """,
-            (user_id, start_date, end_date)
-        )
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
-
     def get_weekly_summaries_by_range(self, user_id: str, start_date: str, end_date: str):
         """Get L1 weekly summaries within a date range."""
         conn = get_db_connection()
@@ -205,57 +189,151 @@ class MemoryService:
         conn.close()
         return summary_id
 
-    def retrieve_relevant_memories(self, user_id: str, query: str, time_range: dict = None, n_results: int = 5):
+    def get_memories_by_date_range(self, user_id: str, start_date: str, end_date: str, limit: int = 50, format_result: bool = True):
         """
-        Hybrid retrieval: Vector Search + Time-based filtering from Timeline.
+        Retrieve raw conversation history within a specific date range from SQLite.
+        
+        Args:
+            user_id: User ID
+            start_date: "YYYY-MM-DD"
+            end_date: "YYYY-MM-DD"
+            limit: Max records
+            format_result: If True, returns formatted strings. If False, returns dict list.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Ensure range covers full days
+        start_ts = f"{start_date} 00:00:00"
+        end_ts = f"{end_date} 23:59:59"
+        
+        cursor.execute(
+            """
+            SELECT role, message, timestamp 
+            FROM conversations 
+            WHERE user_id = ? 
+            AND timestamp BETWEEN ? AND ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+            """,
+            (user_id, start_ts, end_ts, limit)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not format_result:
+            # Return raw dicts for summarizer
+            return [dict(row) for row in rows]
+            
+        memories = []
+        for row in rows:
+            # Format: [2026-02-16 10:00] User: Hello
+            ts = row['timestamp']
+            role = row['role']
+            content = row['message']
+            memories.append(f"[{ts}] {role}: {content}")
+            
+        return memories
+
+    def search_by_keyword(self, user_id: str, keywords: list, limit: int = 5):
+        """
+        Retrieve memories using keyword matching (SQLite LIKE).
+        Returns list of strings.
+        """
+        if not keywords:
+            return []
+            
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build dynamic query for multiple keywords (OR logic)
+        # We want to find messages containing ANY of the keywords
+        conditions = []
+        params = [user_id]
+        
+        for kw in keywords:
+            conditions.append("message LIKE ?")
+            params.append(f"%{kw}%")
+            
+        where_clause = " OR ".join(conditions)
+        
+        query = f"""
+            SELECT role, message, timestamp 
+            FROM conversations 
+            WHERE user_id = ? AND ({where_clause})
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        params.append(limit)
+        
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        results = []
+        for row in rows:
+            results.append(f"[{row['timestamp']}] {row['role']}: {row['message']}")
+            
+        return results
+
+    def retrieve_relevant_memories(self, user_id: str, query: str, keywords: list = None, n_results: int = 5):
+        """
+        Retrieve relevant memories using Hybrid Search (Vector + Keyword) with RRF Fusion.
         """
         # 1. Vector Search (Semantic)
         collection = self.get_user_collection(user_id)
-        vector_results = collection.query(
-            query_texts=[query],
-            n_results=n_results
-        )
-        
-        memories = []
-        if vector_results['documents']:
-            # Format: [Vector Match] content
-            memories.extend([f"[语义联想] {doc}" for doc in vector_results['documents'][0]])
-
-        # 2. Time-based Retrieval (if time_range provided)
-        if time_range:
-            start_date = time_range.get('start_date')
-            end_date = time_range.get('end_date')
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Query timeline for high importance memories in this range
-            # Prioritize higher layers (L2/L3) for broad time ranges, or L0/L1 for specific short ranges
-            # Here we just fetch top importance items
-            cursor.execute(
-                """
-                SELECT content_preview, date_key, layer FROM memory_timeline
-                WHERE user_id = ? 
-                AND date_key BETWEEN ? AND ?
-                ORDER BY importance DESC, layer DESC
-                LIMIT ?
-                """,
-                (user_id, start_date, end_date, n_results)
+        vector_docs = []
+        try:
+            vector_results = collection.query(
+                query_texts=[query],
+                n_results=n_results
             )
-            timeline_rows = cursor.fetchall()
-            conn.close()
-            
-            for row in timeline_rows:
-                date_str = row['date_key']
-                content = row['content_preview']
-                if content:
-                    memories.append(f"[时间回溯 {date_str}] {content}")
+            if vector_results['documents']:
+                vector_docs = vector_results['documents'][0]
+        except Exception as e:
+            print(f"Vector search error: {e}")
 
-        # Deduplicate (simple string matching, ideally should use IDs)
-        unique_memories = list(set(memories))
+        # 2. Keyword Search (Exact)
+        keyword_docs = []
+        if keywords:
+            keyword_docs = self.search_by_keyword(user_id, keywords, limit=n_results)
+
+        # 3. RRF Fusion (Reciprocal Rank Fusion)
+        # Score = 1 / (k + rank)
+        k = 60
+        scores = {}
         
-        # Return combined results (Vector first, then Time) - limited total count
-        return unique_memories[:n_results*2] # Allow more context if mixed
+        # Process Vector Results
+        for rank, doc in enumerate(vector_docs):
+            # Clean up potential existing prefixes if any (though raw docs shouldn't have them)
+            content = doc
+            if content not in scores:
+                scores[content] = 0
+            scores[content] += 1 / (k + rank + 1)
+            
+        # Process Keyword Results
+        for rank, doc in enumerate(keyword_docs):
+            content = doc
+            if content not in scores:
+                scores[content] = 0
+            scores[content] += 1 / (k + rank + 1)
+            
+        # Sort by score descending
+        sorted_memories = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Top N
+        final_memories = [item[0] for item in sorted_memories[:n_results]]
+        
+        # Add source prefix based on where it was found (optional, but helpful for debugging/LLM)
+        # Actually, let's just mark them as [相关记忆] to be generic, or keep [语义联想] style?
+        # The user wants "Precision". Let's just return the content. The LLM will see the content.
+        # But to be consistent with previous logic, let's add a prefix if it's from vector?
+        # No, let's keep it clean. The timestamp in keyword search result is already there.
+        # Vector search result might not have timestamp in content (it stores raw text).
+        # We should probably format vector results too if possible, but metadata is separate.
+        # For now, let's just return the strings.
+        
+        return final_memories
 
     def delete_user_memory(self, user_id: str):
         """Delete all memories for a specific user from Chroma, Redis, and SQLite."""

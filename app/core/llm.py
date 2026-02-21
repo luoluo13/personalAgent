@@ -1,7 +1,7 @@
 import openai
 from app.config import settings
 from app.core.memory import memory_service
-from app.core.time_parser import time_parser
+from app.core.sql_tool import sql_tool
 
 class LLMService:
     def __init__(self):
@@ -30,16 +30,31 @@ class LLMService:
             if context_flags.get("chat_cleared"):
                 extra_system_context.append("（系统提示：用户刚刚清空了聊天界面，这是新的一轮对话）")
 
-        # 2. Extract Time Entity & Retrieve Memories (Conditional)
-        # Use LLM to check intent for memory retrieval OR time calculation
-        # Expanded Intent Prompt
+        # 2. Intent Recognition & Smart Router
         intent_prompt = """
-Analyze the user's message and determine two things:
-1. "need_retrieval": Does it require retrieving past memories/context? (e.g. "what did we talk about?", "my birthday")
-2. "time_query": Is the user asking about current time, date, season, or time difference? (e.g. "what time is it?", "is it weekend?", "how long since last chat?")
+Analyze the user's message and determine the optimal retrieval strategy.
+Return a JSON object with the following fields:
 
-Return JSON: {"need_retrieval": true/false, "time_query": true/false}
+1. "intent_type": Choose one of:
+   - "sql_query": Structured query about stats, time, count, first/last message (e.g. "when did we first meet?", "how many msgs yesterday?").
+   - "vector_search": Semantic query about content/topics (e.g. "what did we say about X?", "that story about Y").
+   - "hybrid_timeline": Query with both time range AND content (e.g. "what did we discuss last week about AI?").
+   - "chat": Casual conversation, no retrieval needed.
+
+2. "sql_statement": (Only if sql_query) Generate a valid SQLite SELECT statement.
+   - Table: conversations
+   - Columns: id, user_id, role ('user'/'assistant'), message, timestamp (YYYY-MM-DD HH:MM:SS)
+   - ALWAYS filter by user_id = '{user_id}' (placeholder, will be replaced in code, or just rely on code injection) -> actually, generate standard SQL, code will handle safety.
+   - Example: "SELECT timestamp FROM conversations WHERE role='user' ORDER BY id ASC LIMIT 1"
+
+3. "search_keywords": (Only if vector_search/hybrid_timeline) List of specific entities, names, or terms for exact keyword matching (e.g. 'Project A', 'Alice').
+
+4. "time_range_hint": (Only if hybrid_timeline) Boolean to trigger time parser.
 """
+        # Inject current user_id into prompt context if needed for SQL generation guidance?
+        # Better to let LLM generate generic SQL and we validate/bind user_id.
+        # But for simplicity, let LLM generate valid SQL assuming it knows the schema.
+        
         intent_check = self.complete(
             messages=[
                 {"role": "system", "content": intent_prompt},
@@ -51,31 +66,92 @@ Return JSON: {"need_retrieval": true/false, "time_query": true/false}
         
         memories = []
         is_recalling = False
-        is_time_query = False
+        is_time_query = False # Deprecated, merged into chat context via system prompt time
         
         if intent_check:
             import json
             try:
                 intent_data = json.loads(intent_check)
-                if intent_data.get("need_retrieval"):
-                    is_recalling = True
-                    time_range = time_parser.parse_time_query(message)
-                    memories = memory_service.retrieve_relevant_memories(user_id, message, time_range=time_range)
+                intent_type = intent_data.get("intent_type", "chat")
                 
-                if intent_data.get("time_query"):
-                    is_time_query = True
-            except:
-                pass # Fallback to defaults
+                if intent_type != "chat":
+                    is_recalling = True
+                    
+                    # --- Route 1: SQL Engine ---
+                    if intent_type == "sql_query":
+                        # Handled in Post-processing block below to allow shared logic if needed
+                        pass
+                            
+                    # --- Route 2: Hybrid Engine (Vector + Keyword) ---
+                    elif intent_type == "vector_search":
+                        keywords = intent_data.get("search_keywords", [])
+                        # Call unified hybrid search
+                        res = memory_service.retrieve_relevant_memories(
+                            user_id, 
+                            query=message,
+                            keywords=keywords,
+                            n_results=10
+                        )
+                        if isinstance(res, list): memories.extend(res)
+
+                    # --- Route 3: Hybrid Engine ---
+                    elif intent_type == "hybrid_timeline":
+                        # 1. Parse time
+                        time_range = time_parser.parse_time_query(message)
+                        if time_range and time_range.get('start_date'):
+                            # 2. Get raw logs from SQL
+                            raw_logs = memory_service.get_memories_by_date_range(
+                                user_id, 
+                                time_range['start_date'], 
+                                time_range['end_date'],
+                                limit=100
+                            )
+                            # 3. Filter by keywords in Python
+                            keywords = intent_data.get("search_keywords", [])
+                            matched = []
+                            for log in raw_logs:
+                                if any(k.lower() in log.lower() for k in keywords):
+                                    matched.append(log)
+                            if not matched and len(raw_logs) < 20: matched = raw_logs
+                            
+                            if matched:
+                                memories.append(f"【时间线混合检索 ({time_range['start_date']})】:\n" + "\n".join(matched[:20]))
+
+                else:
+                    is_recalling = False
+
+                # Post-processing for SQL (Need user_id injection)
+                if intent_type == "sql_query":
+                    # We need to re-generate SQL with correct user_id if we want to be safe, 
+                    # OR we just instruct LLM to use a placeholder and we replace it?
+                    # Let's use placeholder '{user_id}' in prompt instruction.
+                    raw_sql = intent_data.get("sql_statement", "")
+                    if raw_sql:
+                        # Replace placeholder if exists, or try to inject if missing (hard)
+                        # Let's assume LLM follows instruction to filter by user_id.
+                        # We will replace 'user_id_placeholder' if we asked for it.
+                        # Let's just update the PROMPT above to say: "Use user_id = '{user_id}'"
+                        # And here we format it.
+                        final_sql = raw_sql.replace("{user_id}", user_id)
+                        
+                        # Execute
+                        sql_results = sql_tool.execute_query(user_id, final_sql)
+                        if sql_results:
+                            memories.append(f"【结构化数据统计】:\n" + "\n".join(sql_results))
+
+            except Exception as e:
+                print(f"Intent processing error: {e}")
+                pass 
         
-        memory_context = "\n".join([f"- {m}" for m in memories])
+        # Deduplicate and Format Memories
+        unique_memories = list(set(memories))
+        memory_context = "\n\n".join(unique_memories)
         
         # 3. Get recent conversation history (Short-term memory)
         recent_history = memory_service.get_recent_history(user_id, limit=10)
         
         # 4. Construct System Prompt
         from datetime import datetime
-        import locale
-        # locale.setlocale(locale.LC_TIME, 'zh_CN.UTF-8') # Might not work on all Windows envs
         
         now = datetime.now()
         current_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -83,24 +159,34 @@ Return JSON: {"need_retrieval": true/false, "time_query": true/false}
         weekday_str = weekday_map[now.weekday()]
         
         # Calculate specific time info if requested
-        time_context = ""
-        if is_time_query:
-            # Add more detailed time info
-            # E.g. Lunar date, Solar term (requires external lib, skip for now)
-            # Just ensure detailed current time is emphasized
-            time_context = f"【系统时间提示】当前精确时间：{current_time_str} {weekday_str}。请根据此时间准确回答用户的时间询问。"
+        # Even if is_time_query is false (deprecated), we always inject system time.
+        # But for specific time questions, we might want to emphasize it.
+        # Since we inject "Current System Time" at the top of prompt globally, 
+        # the AI should be aware of time. 
+        # Let's keep time_context simple or remove if redundant.
+        # However, user feedback "lost time perception" suggests global prompt isn't enough?
+        # Or maybe the "intent_type" logic bypassed some time handling?
+        # Actually, in the new prompt, we removed "time_query" output field.
+        # So is_time_query is always False.
+        # And time_context block relies on it. 
+        # FIX: Always inject detailed time context if it's a chat or time-related query?
+        # Better yet, just make the global time header very explicit.
         
+        # Enhanced Global Time Context
         formatted_system_prompt = settings.system_prompt.replace("{name}", settings.bot_name)
         
-        # Inject Current Time Context (Global)
-        formatted_system_prompt = f"Current System Time: {current_time_str} {weekday_str}\n\n{formatted_system_prompt}"
+        # Explicitly formatted time block
+        time_header = f"""
+【系统时间广播】
+当前现实时间：{current_time_str} ({weekday_str})
+注意：请时刻感知此时间，如果用户问及时间，以此为准。
+"""
+        formatted_system_prompt = f"{time_header}\n\n{formatted_system_prompt}"
         
         if extra_system_context:
             formatted_system_prompt += "\n\n" + "\n".join(extra_system_context)
 
         system_prompt = f"""{formatted_system_prompt}
-
-{time_context}
 
 【相关记忆】
 {memory_context if memory_context else "（本轮无需回忆）"}

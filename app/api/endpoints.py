@@ -6,6 +6,7 @@ from app.core.memory import memory_service
 from app.config import settings
 import asyncio
 from pathlib import Path
+from datetime import datetime
 
 router = APIRouter()
 
@@ -43,8 +44,6 @@ async def background_save_memory(user_id: str, user_msg: str, ai_msg: str):
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
     try:
-        from datetime import datetime
-        
         # 1. Save User Message to DB & Redis
         memory_service.save_conversation(request.user_id, "user", request.message)
         
@@ -54,7 +53,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         # 3. Save AI Message to DB & Redis
         memory_service.save_conversation(request.user_id, "assistant", ai_response_text)
         
-        # 4. Add background task to update Vector DB
+        # 4. Add background task to update Vector DB (L0 Memory)
         background_tasks.add_task(background_save_memory, request.user_id, request.message, ai_response_text)
         
         # Format current time for display
@@ -70,42 +69,22 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
 
 @router.get("/history/{user_id}", response_model=list[HistoryResponse])
 async def get_history(user_id: str):
-    from datetime import datetime, timedelta
     history = memory_service.get_recent_history(user_id)
     
     formatted_history = []
     for h in history:
-        # Parse timestamp string from DB
-        # SQLite DEFAULT CURRENT_TIMESTAMP is UTC "YYYY-MM-DD HH:MM:SS"
-        # SQLite DEFAULT (datetime('now', 'localtime')) is Local "YYYY-MM-DD HH:MM:SS"
-        
+        # Parse timestamp string from DB (YYYY-MM-DD HH:MM:SS)
+        # Handle potential format variations (UTC vs Local)
         ts_str = str(h["timestamp"])
         display_time = ""
         
         try:
-            # We assume the DB stores it in a format parseable by datetime
-            # If it's UTC (old data), we might need to convert?
-            # If it's Local (new data), we just use it.
-            # But wait, existing data in DB is likely UTC (from CURRENT_TIMESTAMP default).
-            # Changing table schema default doesn't change existing rows.
-            # So we should safely assume it might be UTC and convert if needed?
-            # Or just parse it.
-            
             # Check if it looks like standard format
             dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-            
-            # Simple heuristic: If it's suspiciously "early" (e.g. 8 hours behind now), add 8 hours?
-            # No, that's dangerous.
-            # Let's just trust that the user will clear old data or we accept old data is UTC.
-            # For NEW data, we changed DB default to localtime.
-            # But wait, memory_service.save_conversation inserts without timestamp, letting DB default handle it?
-            # Let's check memory_service.
-            
-            # Actually, to be safe, let's just format what we have.
             display_time = dt.strftime("%H:%M")
             
         except ValueError:
-             # Try ISO format if T exists
+             # Try ISO format or fallback to string slicing
              try:
                  dt = datetime.fromisoformat(ts_str)
                  display_time = dt.strftime("%H:%M")
@@ -123,11 +102,6 @@ async def get_history(user_id: str):
         ))
         
     return formatted_history
-
-@router.post("/memory/extract")
-async def extract_memory(request: MemoryExtractRequest):
-    # Placeholder for Phase 1
-    return {"status": "success", "message": "Memory extraction triggered (MVP Placeholder)"}
 
 @router.delete("/memory/{user_id}")
 async def delete_memory(user_id: str):

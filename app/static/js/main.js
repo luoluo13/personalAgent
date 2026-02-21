@@ -23,30 +23,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Config
     let botName = "Default"; // Default
 
-    function startRecallAnimation() {
-        if (recallInterval) clearInterval(recallInterval);
-        
-        // Use a simpler animation based on user feedback
-        // Just flash "对方陷入了回忆..." then stop
-        // Or cycle dots? 
-        // For now, we will manually set text in the fetch logic, so this helper 
-        // might just be a visual cycler if we wanted.
-        // But since we are handling text updates explicitly in sendBuffer, 
-        // we can simplify this or leave it empty if unused.
-        // Actually, let's keep it for the dot animation "..." if we want dynamic dots.
-        // But the current implementation cycles text phases which we overrode.
-        
-        // Let's repurpose this for a subtle "thinking" dot animation if needed, 
-        // otherwise just clear it to avoid conflict.
-    }
-
-    function stopRecallAnimation() {
-        if (recallInterval) {
-            clearInterval(recallInterval);
-            recallInterval = null;
-        }
-    }
-
     // Theme Logic
     const savedTheme = localStorage.getItem('theme') || 'light';
     if (savedTheme === 'dark') {
@@ -299,8 +275,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             // Stop animation once we get headers/response
-            stopRecallAnimation();
-
+            
             if (!response.ok) {
                 throw new Error('Network response was not ok');
             }
@@ -309,12 +284,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             // Check if backend performed recall
             if (data.is_recalling) {
-                // If backend says it recalled, show specific recall animation
-                startRecallAnimation(); // This cycles through "正在回忆..." -> "想起往事..."
-                // But we want specific sequence: "对方陷入了回忆..." -> "对方正在输入..."
-                // Let's override the complex animation with a simpler one based on requirement.
-                stopRecallAnimation(); // Stop the complex cycler
-                
                 updateTypingText("对方陷入了回忆...");
                 await new Promise(r => setTimeout(r, 1500)); // Pause to show "Recalling" state
             }
@@ -326,7 +295,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             await simulateStreaming(data.response, data.timestamp_display);
 
         } catch (error) {
-            stopRecallAnimation();
             console.error('Error:', error);
             showTyping(false);
             isAIResponding = false;
@@ -482,15 +450,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    function createMessageDiv(role) {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${role === 'user' ? 'user-message' : 'ai-message'}`;
-        return msgDiv;
-    }
-
-    // Removed old sendMessage function
-
-
     function appendMessage(role, text, timestampDisplay = null) {
         const msgDiv = document.createElement('div');
         msgDiv.className = `message ${role === 'user' ? 'user-message' : 'ai-message'}`;

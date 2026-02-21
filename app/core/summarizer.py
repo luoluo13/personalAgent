@@ -62,7 +62,7 @@ Ensure "importance" is a float between 0.1 and 1.0.
         end_date = last_sunday.strftime("%Y-%m-%d")
         
         # 1. Get L0 Memories
-        memories = memory_service.get_memories_by_range(user_id, start_date, end_date)
+        memories = memory_service.get_memories_by_date_range(user_id, start_date, end_date, format_result=False)
         if not memories:
             return 
             

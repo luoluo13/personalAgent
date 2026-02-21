@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import openai
 from app.config import settings
@@ -15,23 +15,34 @@ class TimeParser:
         Parse natural language time query into date range.
         Returns a dict with 'start_date' and 'end_date' (YYYY-MM-DD string) or None if no time found.
         """
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        weekday = datetime.now().strftime("%A")
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+        weekday = now.strftime("%A")
         
         system_prompt = f"""
 You are a precise time entity extraction system.
 Current Date: {current_date} ({weekday})
 
 Your task is to extract the time range mentioned in the user's query relative to the Current Date.
-Return ONLY a JSON object with "start_date" and "end_date" in "YYYY-MM-DD" format.
-If no specific time range is mentioned, return a JSON object with null values: {{"start_date": null, "end_date": null}}.
+If the user mentions a specific date or relative time (e.g. "yesterday", "last week", "January 30th", "two days ago"), calculate the precise start and end dates.
+
+Return ONLY a JSON object with:
+- "start_date": "YYYY-MM-DD"
+- "end_date": "YYYY-MM-DD"
+
+If no specific time range is mentioned, return: {{"start_date": null, "end_date": null}}.
 
 Examples:
+Current: 2026-02-16 (Monday)
+
 Query: "Do you remember my birthday last week?"
-Output: {{"start_date": "2023-10-23", "end_date": "2023-10-29"}} (assuming current date is 2023-11-02)
+Output: {{"start_date": "2026-02-09", "end_date": "2026-02-15"}}
 
 Query: "What did we talk about in January?"
-Output: {{"start_date": "2024-01-01", "end_date": "2024-01-31"}}
+Output: {{"start_date": "2026-01-01", "end_date": "2026-01-31"}}
+
+Query: "I remember we talked about this two days ago"
+Output: {{"start_date": "2026-02-14", "end_date": "2026-02-14"}}
 
 Query: "Hello there"
 Output: {{"start_date": null, "end_date": null}}
@@ -49,21 +60,19 @@ Output: {{"start_date": null, "end_date": null}}
             )
             
             result = response.choices[0].message.content
-            # print(f"Time extraction raw result: {result}") # Debug
-
+            
             if not result:
                 return None
                 
             parsed = json.loads(result)
             
-            # Check for null values explicitly
             if not parsed.get("start_date") or not parsed.get("end_date"):
                 return None
                 
             return parsed
             
         except Exception as e:
-            # print(f"Time extraction error: {e}") # Suppress noise for normal non-time queries
+            # print(f"Time extraction error: {e}") 
             return None
 
 time_parser = TimeParser()
